@@ -1350,14 +1350,7 @@ typedef struct SithPuppetClassSubmode
 
 typedef struct sithAnimclassMode
 {
-    SithPuppetClassSubmode keyframe[42];
-    uint32_t field_2A0;
-    uint32_t field_2A4;
-    uint32_t field_2A8;
-    uint32_t field_2AC;
-#ifdef JKM_TYPES
-    uint32_t pad[8];
-#endif
+    SithPuppetClassSubmode keyframe[45];
 } sithAnimclassMode;
 
 typedef struct SithPuppetClass
