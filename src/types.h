@@ -1350,7 +1350,11 @@ typedef struct SithPuppetClassSubmode
 
 typedef struct sithAnimclassMode
 {
+#ifdef JKM_TYPES
     SithPuppetClassSubmode keyframe[45];
+#else
+    SithPuppetClassSubmode keyframe[43];
+#endif
 } sithAnimclassMode;
 
 typedef struct SithPuppetClass
