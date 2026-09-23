@@ -1794,7 +1794,7 @@ int sithAICmd_Charge(SithAIControlBlock *pActor, SithAIInstinct *pAiclass, SithA
 
             sithAI_FireWeapon(pActor, 0.0, 0.0, 0.0, 0.0, 1, 8);
 
-            // Prevent repeated damage from subsequent collisions during this Charge.
+            // Added: Prevent repeated damage from subsequent collisions during this Charge.
             pActor->moveSpeed = 0.0;
 
             return 0;
