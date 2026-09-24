@@ -1729,6 +1729,7 @@ int sithAICmd_Leap(SithAIControlBlock *actor, SithAIInstinct *aiclass, SithAIIns
             return 0;
         }
         if ((SithThing *)otherFlags == psVar1) {
+            // Added: Only apply Leap collision damage during an active, unattached leap.
             if ((uint32_t)actor->field_28C > sithTime_g_msecGameTime &&
                 actor->thing->attach_flags == 0) {
                 sithAI_FireWeapon(actor, 0.0, 0.0, 0.0, 0.0, 1, 8);
