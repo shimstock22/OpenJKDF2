@@ -104,6 +104,9 @@ static jkGuiElement jkGuiDisplay_aElementsAdvanced[22] = {
     
     { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_EN_JKGFXMOD",            0, {20, 150, 300, 40},  1, 0, "GUIEXT_EN_JKGFXMOD_HINT",          0, 0, 0, {0}, 0},
     { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_EN_TEXTURE_PRECACHE",   0, {20, 190, 300, 40},  1, 0, "GUIEXT_EN_TEXTURE_PRECACHE_HINT",          0, 0, 0, {0}, 0},
+
+    // Added: Optional menu text antialiasing
+    { ELEMENT_CHECKBOX,    0,            0, "GUIEXT_EN_MENU_TEXT_AA", 0,{ 20, 230, 300, 40 }, 1, 0, "GUIEXT_EN_MENU_TEXT_AA_HINT", 0, 0, 0,{ 0 }, 0 },
     
     { ELEMENT_END,         0,            0, NULL,                   0, {0},                 0, 0, NULL,                        0, 0, 0, {0}, 0},
 };
@@ -170,7 +173,10 @@ int jkGuiDisplay_ShowAdvanced()
     jkGui_sub_412E20(&jkGuiDisplay_menuAdvanced, 100, 104, 100);
     jkGuiDisplay_aElementsAdvanced[9].selectedTextEntry = jkPlayer_bEnableJkgm;
     jkGuiDisplay_aElementsAdvanced[10].selectedTextEntry = jkPlayer_bEnableTexturePrecache;
-    
+
+    // Added: Initialize menu text antialiasing checkbox
+    jkGuiDisplay_aElementsAdvanced[11].selectedTextEntry = jkPlayer_bMenuTextAntialiasing;
+
     jkGuiRend_MenuSetReturnKeyShortcutElement(&jkGuiDisplay_menuAdvanced, &jkGuiDisplay_aElementsAdvanced[7]);
     jkGuiRend_MenuSetEscapeKeyShortcutElement(&jkGuiDisplay_menuAdvanced, &jkGuiDisplay_aElementsAdvanced[8]);
     jkGuiSetup_sub_412EF0(&jkGuiDisplay_menuAdvanced, 0);
@@ -179,10 +185,13 @@ int jkGuiDisplay_ShowAdvanced()
     {
         v0 = jkGuiRend_DisplayAndReturnClicked(&jkGuiDisplay_menuAdvanced);
 
-        if ( v0 != -1 )
+        if (v0 != -1)
         {
             jkPlayer_bEnableJkgm = jkGuiDisplay_aElementsAdvanced[9].selectedTextEntry;
             jkPlayer_bEnableTexturePrecache = jkGuiDisplay_aElementsAdvanced[10].selectedTextEntry;
+
+            // Added: Apply menu text antialiasing preference
+            jkPlayer_bMenuTextAntialiasing = jkGuiDisplay_aElementsAdvanced[11].selectedTextEntry;
 
             std3D_PurgeEntireTextureCache();
 

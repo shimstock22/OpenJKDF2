@@ -46,6 +46,16 @@ int stdFont_sub_4356B0(const char16_t *text, stdFont *font, int *pMaxWidth);
 void stdFont_sub_435190(tVBuffer *vbuf, stdFont *font, int destX, int destY, uint16_t ch, int alpha);
 stdFontCharset* stdFont_sub_4358D0(stdFont *font, uint16_t charFirst, uint16_t charLast);
 int stdFont_sub_435950(stdFont *font, uint16_t ch, int *pTexX, int *pWidth);
+// Added: Menu text antialiasing - reset captured glyph data.
+void stdFont_MenuTextAAClear(void);
+// Added: Menu text antialiasing - clear captured glyphs in a rectangle.
+void stdFont_MenuTextAAClearRect(const rdRect* rect);
+// Added: Menu text antialiasing - access captured glyph pixels.
+const uint8_t* stdFont_MenuTextAAGetPixels(void);
+// Added: Menu text antialiasing - access captured background and coverage.
+const uint8_t* stdFont_MenuTextAAGetBackground(void);
+const uint8_t* stdFont_MenuTextAAGetCoverage(void);
+const uint8_t* stdFont_MenuTextAAGetBackgroundMask(void);
 
 MATH_FUNC uint32_t stdFont_DrawAsciiGPU(stdFont *a2, unsigned int blit_x, int blit_y, int x_max, const char *str, int alpha_maybe, flex_t scale);
 MATH_FUNC uint32_t stdFont_DrawAsciiWidth(stdFont *a2, unsigned int blit_x, int blit_y, int x_max, const char *str, int alpha_maybe, flex_t scale);

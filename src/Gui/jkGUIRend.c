@@ -231,6 +231,16 @@ void jkGuiRend_CopyVBuffer(jkGuiMenu *menu, rdRect *rect)
 {
     if ( g_app_suspended && !jkGuiRend_bIsSurfaceValid )
     {
+        // Added: Menu text antialiasing - clear captured text when restoring background.
+        if (rect)
+        {
+            stdFont_MenuTextAAClearRect(rect);
+        }
+        else
+        {
+            stdFont_MenuTextAAClear();
+        }
+
         // Added: PNG menu background support
         // Preserve the dialog panel mask during partial redraws.
         if (rect && !jkGuiDialog_IsPngPanelMenu(menu))
@@ -464,6 +474,9 @@ void jkGuiRend_Paint(jkGuiMenu *menu)
 
     // Added: PNG menu background support
     jkGuiRend_PngMaskClear();
+
+    // Added: Menu text antialiasing - clear captured glyphs before repainting.
+    stdFont_MenuTextAAClear();
 
 #ifndef TARGET_RETRO_HOMEBREW
 #ifdef STDBITMAP_PARTIAL_LOAD
@@ -820,6 +833,9 @@ void jkGuiRend_Open(tVBuffer *menuBuffer, tVBuffer *otherBuf, int32_t fillColor)
 void jkGuiRend_Close()
 {
     if (!jkGuiRend_bOpen) return;
+
+    // Added: Menu text antialiasing - discard captured glyphs on close.
+    stdFont_MenuTextAAClear();
 
     jkGuiRend_menuBuffer = 0;
     jkGuiRend_texture_dword_8561E8 = 0;

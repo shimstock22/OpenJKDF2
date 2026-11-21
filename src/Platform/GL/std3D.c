@@ -10,11 +10,13 @@
 #include "Main/jkGame.h"
 #include "Gui/jkGUIRend.h"   // Added: PNG menu background support
 #include "World/jkPlayer.h"
+#include "General/stdFont.h"
 #include "General/stdBitmap.h"
 #include "stdPlatform.h"
 
 #include "jk.h"
 
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -128,6 +130,18 @@ extern float jkSaber_rgbBlue;
 GLint programMenu_attribute_coord3d, programMenu_attribute_v_color, programMenu_attribute_v_uv, programMenu_attribute_v_norm;
 GLint programMenu_uniform_mvp, programMenu_uniform_tex, programMenu_uniform_displayPalette;
 
+// Added: Menu text antialiasing - shader uniforms.
+static GLint programMenu_uniform_menuTextAA;
+static GLint programMenu_uniform_useMenuTextAA;
+// Added: Menu text antialiasing - signed distance field sampler uniform.
+static GLint programMenu_uniform_menuTextSDF;
+
+// Added: Menu text antialiasing - 2x reconstructed coverage sampler location.
+static GLint programMenu_uniform_menuTextReconstructed = -1;
+
+// Added: Menu text antialiasing - 2x reconstructed glyph color sampler uniform.
+static GLint programMenu_uniform_menuTextReconstructedColor;
+
 // Added: PNG menu background support
 static GLint programMenu_uniform_pngBackground;
 static GLint programMenu_uniform_pngMask;
@@ -152,6 +166,153 @@ static int std3D_pngMenuWidth = 0;
 static int std3D_pngMenuHeight = 0;
 static char std3D_pngMenuCurrentPath[256] = { 0 };
 static GLuint std3D_pngMenuMaskTexture = 0;
+
+// Added: Menu text antialiasing - separate captured glyph texture.
+static GLuint std3D_menuTextAATexture = 0;
+
+// Added: Menu text antialiasing - combined glyph, background, coverage, and opacity.
+static uint8_t std3D_menuTextAAData[640 * 480 * 4];
+
+// Added: Menu text antialiasing - separate signed distance field texture.
+static GLuint std3D_menuTextSDFTexture = 0;
+
+// Added: Menu text antialiasing - separate 2x reconstructed coverage texture.
+static GLuint std3D_menuTextReconstructedTexture = 0;
+
+// Added: Menu text antialiasing - separate 2x reconstructed glyph color texture.
+static GLuint std3D_menuTextReconstructedColorTexture = 0;
+
+// Added: Menu text antialiasing - signed distance values for captured glyphs.
+static uint8_t std3D_menuTextSDFData[640 * 480];
+
+// Added: Menu text antialiasing - dimensions for 2x edge reconstruction.
+#define STD3D_MENU_TEXT_AA_SCALE 2
+#define STD3D_MENU_TEXT_AA_WIDTH (640 * STD3D_MENU_TEXT_AA_SCALE)
+#define STD3D_MENU_TEXT_AA_HEIGHT (480 * STD3D_MENU_TEXT_AA_SCALE)
+
+// Added: Menu text antialiasing - reconstructed high-resolution glyph coverage.
+static uint8_t std3D_menuTextReconstructedCoverage[
+    STD3D_MENU_TEXT_AA_WIDTH * STD3D_MENU_TEXT_AA_HEIGHT
+];
+
+// Added: Menu text antialiasing - reconstructed high-resolution glyph palette indices.
+static uint8_t std3D_menuTextReconstructedColors[
+    STD3D_MENU_TEXT_AA_WIDTH * STD3D_MENU_TEXT_AA_HEIGHT
+];
+
+// Added: Menu text antialiasing - reconstruct glyph coverage at 2x resolution.
+static void std3D_ReconstructMenuTextCoverage2x(void)
+{
+    const uint8_t* source = stdFont_MenuTextAAGetCoverage();
+
+    if (!source)
+        return;
+
+    const int width = 640;
+    const int height = 480;
+    const int outputWidth = STD3D_MENU_TEXT_AA_WIDTH;
+
+    for (int y = 0; y < height; y++)
+    {
+        for (int x = 0; x < width; x++)
+        {
+            int index = y * width + x;
+
+            uint8_t E = source[index];
+
+            uint8_t B = (y > 0)
+                ? source[index - width] : E;
+
+            uint8_t D = (x > 0)
+                ? source[index - 1] : E;
+
+            uint8_t F = (x < width - 1)
+                ? source[index + 1] : E;
+
+            uint8_t H = (y < height - 1)
+                ? source[index + width] : E;
+
+            uint8_t E0 = E;
+            uint8_t E1 = E;
+            uint8_t E2 = E;
+            uint8_t E3 = E;
+
+            // Added: Menu text antialiasing - preserve diagonal edge shapes.
+            if (B != H && D != F)
+            {
+                E0 = (D == B) ? D : E;
+                E1 = (B == F) ? F : E;
+                E2 = (D == H) ? D : E;
+                E3 = (H == F) ? F : E;
+            }
+
+            int outputIndex =
+                (y * 2) * outputWidth + (x * 2);
+
+            std3D_menuTextReconstructedCoverage[outputIndex] = E0;
+            std3D_menuTextReconstructedCoverage[outputIndex + 1] = E1;
+            std3D_menuTextReconstructedCoverage[outputIndex + outputWidth] = E2;
+            std3D_menuTextReconstructedCoverage[outputIndex + outputWidth + 1] = E3;
+        }
+    }
+}
+
+// Added: Menu text antialiasing - reconstruct glyph palette colors at 2x resolution.
+static void std3D_ReconstructMenuTextColors2x(void)
+{
+    const uint8_t* source = stdFont_MenuTextAAGetPixels();
+    const uint8_t* coverage = stdFont_MenuTextAAGetCoverage();
+
+    if (!source || !coverage)
+        return;
+
+    const int width = 640;
+    const int height = 480;
+    const int outputWidth = STD3D_MENU_TEXT_AA_WIDTH;
+
+    for (int y = 0; y < height; y++)
+    {
+        for (int x = 0; x < width; x++)
+        {
+            int index = y * width + x;
+
+            // Added: Menu text antialiasing - preserve uncovered background pixels.
+            uint8_t E = source[index];
+            uint8_t B = (y > 0) ? source[index - width] : E;
+            uint8_t D = (x > 0) ? source[index - 1] : E;
+            uint8_t F = (x < width - 1) ? source[index + 1] : E;
+            uint8_t H = (y < height - 1) ? source[index + width] : E;
+
+            // Added: Menu text antialiasing - avoid using uncaptured neighboring colors.
+            if (y > 0 && coverage[index - width] == 0) B = E;
+            if (x > 0 && coverage[index - 1] == 0) D = E;
+            if (x < width - 1 && coverage[index + 1] == 0) F = E;
+            if (y < height - 1 && coverage[index + width] == 0) H = E;
+
+            uint8_t E0 = E;
+            uint8_t E1 = E;
+            uint8_t E2 = E;
+            uint8_t E3 = E;
+
+            // Added: Menu text antialiasing - reconstruct internal diagonal color edges.
+            if (coverage[index] != 0 && B != H && D != F)
+            {
+                E0 = (D == B) ? D : E;
+                E1 = (B == F) ? F : E;
+                E2 = (D == H) ? D : E;
+                E3 = (H == F) ? F : E;
+            }
+
+            int outputIndex =
+                (y * 2) * outputWidth + (x * 2);
+
+            std3D_menuTextReconstructedColors[outputIndex] = E0;
+            std3D_menuTextReconstructedColors[outputIndex + 1] = E1;
+            std3D_menuTextReconstructedColors[outputIndex + outputWidth] = E2;
+            std3D_menuTextReconstructedColors[outputIndex + outputWidth + 1] = E3;
+        }
+    }
+}
 
 void* blank_data = NULL, *blank_data_white = NULL;
 GLuint worldpal_texture;
@@ -557,6 +718,25 @@ int init_resources()
     programMenu_uniform_tex = std3D_tryFindUniform(programMenu, "tex");
     programMenu_uniform_displayPalette = std3D_tryFindUniform(programMenu, "displayPalette");
 
+    // Added: Menu text antialiasing - locate shader uniforms.
+    programMenu_uniform_menuTextAA =
+        std3D_tryFindUniform(programMenu, "menuTextAATexture");
+
+    programMenu_uniform_useMenuTextAA =
+        std3D_tryFindUniform(programMenu, "useMenuTextAA");
+
+    // Added: Menu text antialiasing - locate signed distance field sampler.
+    programMenu_uniform_menuTextSDF =
+        std3D_tryFindUniform(programMenu, "menuTextSDFTexture");
+
+    // Added: Menu text antialiasing - locate 2x reconstructed coverage sampler.
+    programMenu_uniform_menuTextReconstructed =
+        std3D_tryFindUniform(programMenu, "menuTextReconstructedTexture");
+
+    // Added: Menu text antialiasing - locate 2x reconstructed glyph color sampler.
+    programMenu_uniform_menuTextReconstructedColor =
+        std3D_tryFindUniform(programMenu, "menuTextReconstructedColorTexture");
+
     // Added: PNG menu background support
     programMenu_uniform_pngBackground =
         std3D_tryFindUniform(programMenu, "pngMenuBackground");
@@ -762,6 +942,34 @@ void std3D_FreeResources()
     {
         glDeleteTextures(1, &std3D_pngMenuMaskTexture);
         std3D_pngMenuMaskTexture = 0;
+    }
+
+    // Added: Menu text antialiasing - release captured glyph texture.
+    if (std3D_menuTextAATexture)
+    {
+        glDeleteTextures(1, &std3D_menuTextAATexture);
+        std3D_menuTextAATexture = 0;
+    }
+
+    // Added: Menu text antialiasing - release signed distance field texture.
+    if (std3D_menuTextSDFTexture)
+    {
+        glDeleteTextures(1, &std3D_menuTextSDFTexture);
+        std3D_menuTextSDFTexture = 0;
+    }
+
+    // Added: Menu text antialiasing - release reconstructed coverage texture.
+    if (std3D_menuTextReconstructedTexture)
+    {
+        glDeleteTextures(1, &std3D_menuTextReconstructedTexture);
+        std3D_menuTextReconstructedTexture = 0;
+    }
+
+    // Added: Menu text antialiasing - release reconstructed glyph color texture.
+    if (std3D_menuTextReconstructedColorTexture)
+    {
+        glDeleteTextures(1, &std3D_menuTextReconstructedColorTexture);
+        std3D_menuTextReconstructedColorTexture = 0;
     }
 
     std3D_pngMenuWidth = 0;
@@ -1291,6 +1499,316 @@ static void std3D_PresentSWWorld(void)
 }
 #endif
 
+// Added: Menu text antialiasing - upload combined glyph data.
+static void std3D_UpdateMenuTextAATexture(void)
+{
+#if defined(SDL2_RENDER) && defined(TARGET_CAN_JKGM)
+    const uint8_t* glyphs = stdFont_MenuTextAAGetPixels();
+    const uint8_t* background = stdFont_MenuTextAAGetBackground();
+    const uint8_t* coverage = stdFont_MenuTextAAGetCoverage();
+    // Added: Menu text antialiasing - original GUI opacity beneath glyphs.
+    const uint8_t* backgroundMask = stdFont_MenuTextAAGetBackgroundMask();
+
+    if (!glyphs || !background || !coverage || !backgroundMask)
+        return;
+
+    // Added: Pack glyph, background, coverage, and original GUI opacity.
+    for (int i = 0; i < 640 * 480; i++)
+    {
+        std3D_menuTextAAData[i * 4 + 0] = glyphs[i];
+        std3D_menuTextAAData[i * 4 + 1] = background[i];
+        std3D_menuTextAAData[i * 4 + 2] = coverage[i];
+        std3D_menuTextAAData[i * 4 + 3] = backgroundMask[i];
+    }
+
+    if (!std3D_menuTextAATexture)
+    {
+        glGenTextures(1, &std3D_menuTextAATexture);
+
+        if (!std3D_menuTextAATexture)
+            return;
+
+        glBindTexture(GL_TEXTURE_2D, std3D_menuTextAATexture);
+
+        // Added: Menu text antialiasing - test bilinear glyph coverage filtering.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    else
+    {
+        glBindTexture(GL_TEXTURE_2D, std3D_menuTextAATexture);
+    }
+
+    GLint oldUnpackAlignment = 4;
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &oldUnpackAlignment);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA8,
+        640,
+        480,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+        std3D_menuTextAAData
+    );
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, oldUnpackAlignment);
+#endif
+}
+
+// Added: Menu text antialiasing - initialize signed distance field texture.
+static void std3D_UpdateMenuTextSDFTexture(void)
+{
+#if defined(SDL2_RENDER) && defined(TARGET_CAN_JKGM)
+    // Added: Menu text antialiasing - generate a local signed distance field.
+    const uint8_t* coverage = stdFont_MenuTextAAGetCoverage();
+
+    if (!coverage)
+        return;
+
+    const int width = 640;
+    const int height = 480;
+    const int radius = 4;
+    const int radiusSquared = radius * radius;
+
+    for (int y = 0; y < height; y++)
+    {
+        for (int x = 0; x < width; x++)
+        {
+            int index = x + y * width;
+            int inside = coverage[index] > 127;
+            // Added: Menu text antialiasing - track distance to the nearest pixel boundary.
+            float nearestDistanceSquared = (float)radiusSquared;
+
+            for (int dy = -radius; dy <= radius; dy++)
+            {
+                int ny = y + dy;
+
+                if (ny < 0 || ny >= height)
+                    continue;
+
+                for (int dx = -radius; dx <= radius; dx++)
+                {
+                    int nx = x + dx;
+
+                    if (nx < 0 || nx >= width)
+                        continue;
+
+                    // Added: Menu text antialiasing - measure distance to pixel boundaries.
+                    int neighborIndex = nx + ny * width;
+                    int neighborInside = coverage[neighborIndex] > 127;
+
+                    if (neighborInside != inside)
+                    {
+                        float edgeX = fmaxf(fabsf((float)dx) - 0.5f, 0.0f);
+                        float edgeY = fmaxf(fabsf((float)dy) - 0.5f, 0.0f);
+
+                        float distanceSquared = edgeX * edgeX + edgeY * edgeY;
+
+                        if (distanceSquared < nearestDistanceSquared)
+                            nearestDistanceSquared = distanceSquared;
+                    }
+                }
+            }
+
+            // Added: Menu text antialiasing - use the estimated glyph boundary distance.
+            float distance = sqrtf(nearestDistanceSquared);
+
+            if (!inside)
+                distance = -distance;
+
+            // Added: Menu text antialiasing - encode signed distance in R8.
+            float encoded = 128.0f + distance * 24.0f;
+
+            if (encoded < 0.0f)
+                encoded = 0.0f;
+            else if (encoded > 255.0f)
+                encoded = 255.0f;
+
+            std3D_menuTextSDFData[index] = (uint8_t)(encoded + 0.5f);
+        }
+    }
+    if (!std3D_menuTextSDFTexture)
+    {
+        glGenTextures(1, &std3D_menuTextSDFTexture);
+
+        if (!std3D_menuTextSDFTexture)
+            return;
+
+        glBindTexture(GL_TEXTURE_2D, std3D_menuTextSDFTexture);
+
+        // Added: Menu text antialiasing - smooth distance field sampling.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    else
+    {
+        glBindTexture(GL_TEXTURE_2D, std3D_menuTextSDFTexture);
+    }
+
+    GLint oldUnpackAlignment = 4;
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &oldUnpackAlignment);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_R8,
+        640,
+        480,
+        0,
+        GL_RED,
+        GL_UNSIGNED_BYTE,
+        std3D_menuTextSDFData
+    );
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, oldUnpackAlignment);
+#endif
+}
+
+// Added: Menu text antialiasing - upload 2x reconstructed glyph coverage.
+static void std3D_UpdateMenuTextReconstructedTexture(void)
+{
+#if defined(SDL2_RENDER) && defined(TARGET_CAN_JKGM)
+    if (!jkPlayer_bMenuTextAntialiasing)
+        return;
+
+    // Added: Menu text antialiasing - generate edge-aware coverage.
+    std3D_ReconstructMenuTextCoverage2x();
+
+    // Added: Menu text antialiasing - create the reconstructed texture.
+    if (!std3D_menuTextReconstructedTexture)
+    {
+        glGenTextures(1, &std3D_menuTextReconstructedTexture);
+
+        if (!std3D_menuTextReconstructedTexture)
+            return;
+
+        glBindTexture(
+            GL_TEXTURE_2D,
+            std3D_menuTextReconstructedTexture
+        );
+
+        glTexParameteri(
+            GL_TEXTURE_2D,
+            GL_TEXTURE_MIN_FILTER,
+            GL_LINEAR
+        );
+
+        glTexParameteri(
+            GL_TEXTURE_2D,
+            GL_TEXTURE_MAG_FILTER,
+            GL_LINEAR
+        );
+
+        glTexParameteri(
+            GL_TEXTURE_2D,
+            GL_TEXTURE_WRAP_S,
+            GL_CLAMP_TO_EDGE
+        );
+
+        glTexParameteri(
+            GL_TEXTURE_2D,
+            GL_TEXTURE_WRAP_T,
+            GL_CLAMP_TO_EDGE
+        );
+    }
+    else
+    {
+        glBindTexture(
+            GL_TEXTURE_2D,
+            std3D_menuTextReconstructedTexture
+        );
+    }
+
+    // Added: Menu text antialiasing - preserve pixel unpack alignment.
+    GLint previousAlignment = 4;
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &previousAlignment);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    // Added: Menu text antialiasing - upload reconstructed coverage.
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_R8,
+        STD3D_MENU_TEXT_AA_WIDTH,
+        STD3D_MENU_TEXT_AA_HEIGHT,
+        0,
+        GL_RED,
+        GL_UNSIGNED_BYTE,
+        std3D_menuTextReconstructedCoverage
+    );
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, previousAlignment);
+#endif
+}
+
+// Added: Menu text antialiasing - upload 2x reconstructed glyph palette colors.
+static void std3D_UpdateMenuTextReconstructedColorTexture(void)
+{
+#if defined(SDL2_RENDER) && defined(TARGET_CAN_JKGM)
+    if (!jkPlayer_bMenuTextAntialiasing)
+        return;
+
+    // Added: Menu text antialiasing - reconstruct internal glyph color edges.
+    std3D_ReconstructMenuTextColors2x();
+
+    // Added: Menu text antialiasing - create reconstructed color texture.
+    if (!std3D_menuTextReconstructedColorTexture)
+    {
+        glGenTextures(1, &std3D_menuTextReconstructedColorTexture);
+
+        if (!std3D_menuTextReconstructedColorTexture)
+            return;
+
+        glBindTexture(
+            GL_TEXTURE_2D,
+            std3D_menuTextReconstructedColorTexture
+        );
+
+        // Added: Menu text antialiasing - preserve exact palette indices.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    else
+    {
+        glBindTexture(
+            GL_TEXTURE_2D,
+            std3D_menuTextReconstructedColorTexture
+        );
+    }
+
+    // Added: Menu text antialiasing - preserve pixel unpack alignment.
+    GLint previousAlignment = 4;
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &previousAlignment);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+    // Added: Menu text antialiasing - upload reconstructed palette indices.
+    glTexImage2D(
+        GL_TEXTURE_2D,
+        0,
+        GL_R8,
+        STD3D_MENU_TEXT_AA_WIDTH,
+        STD3D_MENU_TEXT_AA_HEIGHT,
+        0,
+        GL_RED,
+        GL_UNSIGNED_BYTE,
+        std3D_menuTextReconstructedColors
+    );
+
+    glPixelStorei(GL_UNPACK_ALIGNMENT, previousAlignment);
+#endif
+}
+
 // Added: PNG menu background support
 static void std3D_UpdatePngMenuMask(void)
 {
@@ -1486,6 +2004,19 @@ void std3D_DrawMenu()
 
         if (std3D_pngMenuTexture)
             std3D_UpdatePngMenuMask();
+
+        // Added: Menu text antialiasing - upload captured glyph and distance field data.
+        if (jkPlayer_bMenuTextAntialiasing)
+        {
+            std3D_UpdateMenuTextAATexture();
+
+            // Added: Menu text antialiasing - generate and upload glyph distance field.
+            std3D_UpdateMenuTextSDFTexture();
+            // Added: Menu text antialiasing - update 2x reconstructed glyph coverage.
+            std3D_UpdateMenuTextReconstructedTexture();
+            // Added: Menu text antialiasing - update 2x reconstructed glyph palette colors.
+            std3D_UpdateMenuTextReconstructedColorTexture();
+        }
     }
 
     //printf("Draw menu\n");
@@ -1761,6 +2292,46 @@ void std3D_DrawMenu()
     glActiveTexture(GL_TEXTURE0 + 0);
     glUniform1i(programMenu_uniform_tex, 0);
     glUniform1i(programMenu_uniform_displayPalette, 1);
+
+    // Added: Menu text antialiasing - bind captured glyphs to texture unit 4.
+    glActiveTexture(GL_TEXTURE4);
+    glBindTexture(GL_TEXTURE_2D, std3D_menuTextAATexture);
+
+    glUniform1i(programMenu_uniform_menuTextAA, 4);
+
+    // Added: Menu text antialiasing - bind signed distance field to texture unit 5.
+    glActiveTexture(GL_TEXTURE5);
+    glBindTexture(GL_TEXTURE_2D, std3D_menuTextSDFTexture);
+
+    // Added: Menu text antialiasing - bind 2x reconstructed coverage to texture unit 6.
+    glActiveTexture(GL_TEXTURE6);
+    glBindTexture(GL_TEXTURE_2D, std3D_menuTextReconstructedTexture);
+
+    // Added: Menu text antialiasing - assign reconstructed sampler to texture unit 6.
+    if (programMenu_uniform_menuTextReconstructed >= 0)
+        glUniform1i(programMenu_uniform_menuTextReconstructed, 6);
+
+    // Added: Menu text antialiasing - bind 2x reconstructed glyph colors to texture unit 7.
+    glActiveTexture(GL_TEXTURE7);
+    glBindTexture(GL_TEXTURE_2D, std3D_menuTextReconstructedColorTexture);
+
+    // Added: Menu text antialiasing - assign reconstructed color sampler to texture unit 7.
+    if (programMenu_uniform_menuTextReconstructedColor >= 0)
+        glUniform1i(programMenu_uniform_menuTextReconstructedColor, 7);
+
+    // Added: Menu text antialiasing - assign SDF sampler to texture unit 5.
+    if (programMenu_uniform_menuTextSDF >= 0)
+        glUniform1i(programMenu_uniform_menuTextSDF, 5);
+
+    glUniform1i(
+        programMenu_uniform_useMenuTextAA,
+        jkPlayer_bMenuTextAntialiasing&&
+        jkGuiRend_IsMenuActive() &&
+        !jkCutscene_isRendering &&
+        std3D_menuTextAATexture != 0
+    );
+
+    glActiveTexture(GL_TEXTURE0);
 
     // Added: PNG menu background support
     glUniform1i(programMenu_uniform_pngBackground, 2);

@@ -1,5 +1,7 @@
 #include "stdFont.h"
 
+#include <string.h>
+#include "Gui/jkGUIRend.h"
 #include "stdPlatform.h"
 #include "General/stdBitmap.h"
 #include "General/stdString.h"
@@ -7,7 +9,12 @@
 #include "Win95/std.h"
 #include "Platform/std3D.h"
 #include "World/jkPlayer.h"
-#include "General/stdString.h"
+
+#ifdef SDL2_RENDER
+#include <SDL3/SDL.h> // Added: Access SDL_Surface pixels for menu text antialiasing.
+#endif
+
+#define INT_FLOAT_SCALED(x, s) ((int)((flex_t)(x) * (flex_t)(s))) // FLEXTODO
 
 #define INT_FLOAT_SCALED(x, s) ((int)((flex_t)(x) * (flex_t)(s))) // FLEXTODO
 
@@ -32,6 +39,236 @@ static stdFontCharset* stdFont_FindCharset(stdFont *font, uint16_t *pChar)
         charset = charset->previous;
     }
     return NULL;
+}
+
+// Added: Menu text antialiasing - captured glyph palette indices.
+#define STDFONT_MENU_AA_WIDTH 640
+#define STDFONT_MENU_AA_HEIGHT 480
+
+static uint8_t stdFont_menuTextPixels[
+    STDFONT_MENU_AA_WIDTH * STDFONT_MENU_AA_HEIGHT
+];
+
+// Added: Menu text antialiasing - original pixels beneath captured glyphs.
+static uint8_t stdFont_menuTextBackground[
+    STDFONT_MENU_AA_WIDTH * STDFONT_MENU_AA_HEIGHT
+];
+
+// Added: Menu text antialiasing - tracks pixels with captured text.
+static uint8_t stdFont_menuTextCoverage[
+    STDFONT_MENU_AA_WIDTH * STDFONT_MENU_AA_HEIGHT
+];
+
+// Added: Menu text antialiasing - preserve GUI opacity before glyph drawing.
+static uint8_t stdFont_menuTextBackgroundMask[
+    STDFONT_MENU_AA_WIDTH * STDFONT_MENU_AA_HEIGHT
+];
+
+// Added: Menu text antialiasing - clear captured glyph pixels.
+void stdFont_MenuTextAAClear(void)
+{
+    // Added: Menu text antialiasing - reset captured background opacity.
+    memset(
+        stdFont_menuTextBackgroundMask,
+        0,
+        sizeof(stdFont_menuTextBackgroundMask)
+    );
+    memset(stdFont_menuTextPixels, 0, sizeof(stdFont_menuTextPixels));
+
+    // Added: Menu text antialiasing - reset background and coverage.
+    memset(stdFont_menuTextBackground, 0, sizeof(stdFont_menuTextBackground));
+    memset(stdFont_menuTextCoverage, 0, sizeof(stdFont_menuTextCoverage));
+}
+
+// Added: Menu text antialiasing - clear captured glyphs in a rectangle.
+void stdFont_MenuTextAAClearRect(const rdRect* rect)
+{
+    if (!rect)
+        return;
+
+    int left = rect->x;
+    int top = rect->y;
+    int right = rect->x + rect->width;
+    int bottom = rect->y + rect->height;
+
+    if (left < 0) left = 0;
+    if (top < 0) top = 0;
+    if (right > STDFONT_MENU_AA_WIDTH) right = STDFONT_MENU_AA_WIDTH;
+    if (bottom > STDFONT_MENU_AA_HEIGHT) bottom = STDFONT_MENU_AA_HEIGHT;
+
+    if (right <= left || bottom <= top)
+        return;
+
+    for (int y = top; y < bottom; y++)
+    {
+        memset(
+            &stdFont_menuTextPixels[y * STDFONT_MENU_AA_WIDTH + left],
+            0,
+            right - left
+        );
+        // Added: Menu text antialiasing - clear background and coverage in this row.
+        memset(
+            &stdFont_menuTextBackground[y * STDFONT_MENU_AA_WIDTH + left],
+            0,
+            right - left
+        );
+
+        memset(
+            &stdFont_menuTextCoverage[y * STDFONT_MENU_AA_WIDTH + left],
+            0,
+            right - left
+        );
+        // Added: Menu text antialiasing - clear captured background opacity.
+        memset(
+            &stdFont_menuTextBackgroundMask[y * STDFONT_MENU_AA_WIDTH + left],
+            0,
+            right - left
+        );
+    }
+}
+
+// Added: Menu text antialiasing - expose captured glyph pixels.
+const uint8_t* stdFont_MenuTextAAGetPixels(void)
+{
+    return stdFont_menuTextPixels;
+}
+
+// Added: Menu text antialiasing - access original background pixels.
+const uint8_t* stdFont_MenuTextAAGetBackground(void)
+{
+    return stdFont_menuTextBackground;
+}
+
+// Added: Menu text antialiasing - access glyph coverage.
+const uint8_t* stdFont_MenuTextAAGetCoverage(void)
+{
+    return stdFont_menuTextCoverage;
+}
+
+// Added: Menu text antialiasing - access pre-glyph GUI opacity.
+const uint8_t* stdFont_MenuTextAAGetBackgroundMask(void)
+{
+    return stdFont_menuTextBackgroundMask;
+}
+
+// Added: Menu text antialiasing - capture menu glyph pixels.
+static void stdFont_CaptureMenuGlyph(
+    tVBuffer* destination,
+    tVBuffer* source,
+    unsigned int x,
+    int y,
+    rdRect* rect,
+    int alpha)
+{
+#ifdef SDL2_RENDER
+    if (!destination || !source ||
+        !destination->sdlSurface || !source->sdlSurface)
+        return;
+
+    rdRect fallback = {
+        0, 0,
+        source->format.width,
+        source->format.height
+    };
+
+    if (!rect)
+        rect = &fallback;
+
+    const uint8_t* srcPixels =
+        (const uint8_t*)source->sdlSurface->pixels;
+
+    const uint32_t srcStride = source->format.rowSize;
+
+    // Added: Menu text antialiasing - read original destination pixels.
+    const uint8_t* dstPixels =
+        (const uint8_t*)destination->sdlSurface->pixels;
+
+    const uint32_t dstStride = destination->format.rowSize;
+
+    // Added: Menu text antialiasing - inspect GUI opacity before drawing text.
+    const uint8_t* pngMask = jkGuiRend_PngMaskGetData();
+
+    int hasAlpha = (rect->width != 640) && (alpha & 1);
+
+    for (int j = 0; j < rect->height; j++)
+    {
+        int srcY = rect->y + j;
+        int dstY = y + j;
+
+        if (srcY < 0 || srcY >= source->format.height ||
+            dstY < 0 || dstY >= STDFONT_MENU_AA_HEIGHT)
+            continue;
+
+        for (int i = 0; i < rect->width; i++)
+        {
+            int srcX = rect->x + i;
+            int dstX = (int)x + i;
+
+            if (srcX < 0 || srcX >= source->format.width ||
+                dstX < 0 || dstX >= STDFONT_MENU_AA_WIDTH)
+                continue;
+
+            uint8_t pixel = srcPixels[srcX + srcY * srcStride];
+
+            if (!pixel && hasAlpha)
+                continue;
+
+            // Added: Menu text antialiasing - preserve background on first glyph write.
+            int index = dstX + dstY * STDFONT_MENU_AA_WIDTH;
+
+            if (!stdFont_menuTextCoverage[index])
+            {
+                // Added: Preserve the original background and its GUI opacity.
+                stdFont_menuTextBackground[index] =
+                    dstPixels[dstX + dstY * dstStride];
+
+                stdFont_menuTextBackgroundMask[index] =
+                    pngMask ? pngMask[index] : 0;
+            }
+
+            stdFont_menuTextPixels[index] = pixel;
+            stdFont_menuTextCoverage[index] = 255;
+        }
+    }
+#else
+    (void)destination;
+    (void)source;
+    (void)x;
+    (void)y;
+    (void)rect;
+    (void)alpha;
+#endif
+}
+
+// Added: Menu text antialiasing - shared glyph rendering entry point.
+static void stdFont_CopyGlyph(
+    tVBuffer* destination,
+    tVBuffer* source,
+    unsigned int x,
+    int y,
+    rdRect* rect,
+    int alpha)
+{
+    // Added: Identify menu glyphs when antialiasing is enabled.
+    int useMenuTextAA =
+        jkPlayer_bMenuTextAntialiasing &&
+        jkGuiRend_PngIsMenuBuffer(destination);
+
+    if (useMenuTextAA)
+    {
+        // Added: Capture glyph pixels for future antialiased rendering.
+        stdFont_CaptureMenuGlyph(
+            destination,
+            source,
+            x,
+            y,
+            rect,
+            alpha
+        );
+    }
+
+    // Preserve original rendering until the antialiased path is ready.
+    stdDisplay_VBufferCopy(destination, source, x, y, rect, alpha);
 }
 
 stdFont* stdFont_Load(char *fpath, int a2, int a3)
@@ -263,7 +500,7 @@ LABEL_21:
             }
             if ( (int)(v9 + v16) < (int)(blit_x + a5) )
             {
-                stdDisplay_VBufferCopy(vbuf, a2a, v9, blit_y, &a5a, alpha_maybe);
+                stdFont_CopyGlyph(vbuf, a2a, v9, blit_y, &a5a, alpha_maybe);
                 v13 = a5a.width + font->marginY;
                 goto LABEL_26;
             }
@@ -378,7 +615,7 @@ LABEL_19:
                             v17 = v16 - a4;
                             if ( rect.height >= v17 )
                                 rect.height = v17;
-                            stdDisplay_VBufferCopy(a1, v10, v9, a4, &rect, a7);
+                            stdFont_CopyGlyph(a1, v10, v9, a4, &rect, a7);
                             v13 = rect.width + a2->marginY;
                         }
                         v9 += v13;
@@ -597,7 +834,7 @@ LABEL_51:
                                 rect.height = vbuf2->format.height;
                                 if (rect.height >= v28 )
                                     rect.height = v28;
-                                stdDisplay_VBufferCopy(paintSurface, vbuf2, v24, a3, &rect, a7);
+                                stdFont_CopyGlyph(paintSurface, vbuf2, v24, a3, &rect, a7);
                                 v24 += rect.width + font->marginY;
                             }
                             ++v23;

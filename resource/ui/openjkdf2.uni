@@ -50,6 +50,10 @@ MSGS 116          # <--- DON'T FORGET TO UPDATE THIS COUNT
    "GUIEXT_EN_TEXTURE_PRECACHE"           0 "Enable texture precaching"
    "GUIEXT_EN_TEXTURE_PRECACHE_HINT"      0 "Load all material textures ahead-of-time instead of just-in-time?"
 
+   # Added: Optional menu text antialiasing
+   "GUIEXT_EN_MENU_TEXT_AA"               0 "Menu Text Antialiasing"
+   "GUIEXT_EN_MENU_TEXT_AA_HINT"          0 "Smooth menu text edges for improved readability at higher resolutions."
+
 # TWL-only for now
    "GUIEXT_EN_EMISSIVE_TEXTURES"          0 "Enable emissive textures"
    "GUIEXT_EN_EMISSIVE_TEXTURES_HINT"     0 "Display textures which glow in the dark."

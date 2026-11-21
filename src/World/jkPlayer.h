@@ -156,6 +156,7 @@ extern flex_t jkPlayer_canonicalPhysTickrate;
 
 extern int jkPlayer_bEnableJkgm;
 extern int jkPlayer_bEnableTexturePrecache;
+extern int jkPlayer_bMenuTextAntialiasing; // Added: Optional menu text antialiasing
 
 extern int jkPlayer_bKeepCorpses;
 extern int jkPlayer_bFastMissionText;

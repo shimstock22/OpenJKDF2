@@ -64,6 +64,8 @@ flex_t jkPlayer_ssaaMultiple = 1.0;
 flex_t jkPlayer_gamma = 1.0;
 int jkPlayer_bEnableJkgm = 1;
 int jkPlayer_bEnableTexturePrecache = 1;
+// Added: Optional menu text antialiasing
+int jkPlayer_bMenuTextAntialiasing = 0;
 int jkPlayer_bKeepCorpses = 0;
 int jkPlayer_bFastMissionText = FAST_MISSION_TEXT_DEFAULT;
 int jkPlayer_bUseOldPlayerPhysics = 0;
@@ -190,6 +192,7 @@ void jkPlayer_StartupVars()
     sithCvar_RegisterFlex("r_gamma",                    1.0,                        &jkPlayer_gamma,                    CVARFLAG_LOCAL);
     sithCvar_RegisterBool("r_bEnableJkgm",              1,                          &jkPlayer_bEnableJkgm,              CVARFLAG_LOCAL|CVARFLAG_READONLY);
     sithCvar_RegisterBool("r_bEnableTexturePrecache",   1,                          &jkPlayer_bEnableTexturePrecache,   CVARFLAG_LOCAL|CVARFLAG_READONLY);
+    sithCvar_RegisterBool("r_bMenuTextAntialiasing",    0,                          &jkPlayer_bMenuTextAntialiasing,    CVARFLAG_LOCAL|CVARFLAG_READONLY); // Added: Register menu text antialiasing preference
     sithCvar_RegisterBool("g_bKeepCorpses",             0,                          &jkPlayer_bKeepCorpses,             CVARFLAG_LOCAL);
     sithCvar_RegisterBool("menu_bFastMissionText",      FAST_MISSION_TEXT_DEFAULT,  &jkPlayer_bFastMissionText,         CVARFLAG_LOCAL);
     sithCvar_RegisterBool("g_bUseOldPlayerPhysics",     0,                          &jkPlayer_bUseOldPlayerPhysics,     CVARFLAG_LOCAL);
@@ -239,6 +242,7 @@ void jkPlayer_ResetVars()
     jkPlayer_gamma = 1.0;
     jkPlayer_bEnableJkgm = 1;
     jkPlayer_bEnableTexturePrecache = 1;
+    jkPlayer_bMenuTextAntialiasing = 0; // Added: Default menu text antialiasing to disabled
     jkPlayer_bKeepCorpses = 0;
     jkPlayer_bFastMissionText = FAST_MISSION_TEXT_DEFAULT;
     jkPlayer_bUseOldPlayerPhysics = 0;
@@ -587,6 +591,7 @@ void jkPlayer_WriteConf(char16_t *name)
         stdJSON_SaveFloat(ext_fpath, "gamma", jkPlayer_gamma);
         stdJSON_SaveBool(ext_fpath, "bEnableJkgm", jkPlayer_bEnableJkgm);
         stdJSON_SaveBool(ext_fpath, "bEnableTexturePrecache", jkPlayer_bEnableTexturePrecache);
+        stdJSON_SaveBool(ext_fpath, "bMenuTextAntialiasing", jkPlayer_bMenuTextAntialiasing); // Added: Save menu text antialiasing preference
         stdJSON_SaveBool(ext_fpath, "bKeepCorpses", jkPlayer_bKeepCorpses);
         stdJSON_SaveBool(ext_fpath, "bFastMissionText", jkPlayer_bFastMissionText);
         stdJSON_SaveFloat(ext_fpath, "hudScale", jkPlayer_hudScale);
@@ -794,6 +799,7 @@ int jkPlayer_ReadConf(char16_t *name)
 
         jkPlayer_bEnableJkgm = stdJSON_GetBool(ext_fpath, "bEnableJkgm", jkPlayer_bEnableJkgm);
         jkPlayer_bEnableTexturePrecache = stdJSON_GetBool(ext_fpath, "bEnableTexturePrecache", jkPlayer_bEnableTexturePrecache);
+        jkPlayer_bMenuTextAntialiasing = stdJSON_GetBool(ext_fpath, "bMenuTextAntialiasing", jkPlayer_bMenuTextAntialiasing); // Added: Load menu text antialiasing preference
         jkPlayer_bKeepCorpses = stdJSON_GetBool(ext_fpath, "bKeepCorpses", jkPlayer_bKeepCorpses);
 #ifndef TARGET_RETRO_HOMEBREW
         // Added: RETRO always uses the fast default (no input wait at load screens)
